@@ -1,4 +1,0 @@
-﻿  main.cpp
-c:\users\geeks\documents\github\windivert-example\windivert\main.cpp(45): warning C4101: 'send_addr': unreferenced local variable
-  windivert.vcxproj -> C:\Users\geeks\Documents\GitHub\windivert-example\Debug\windivert.exe
-  windivert.vcxproj -> C:\Users\geeks\Documents\GitHub\windivert-example\Debug\windivert.pdb (Full PDB)
