@@ -31,7 +31,7 @@ typedef struct
 */
 static void PacketIpInit(PWINDIVERT_IPHDR packet);
 static void PacketIpTcpInit(PTCPPACKET packet);
-static bool Compare(UINT8 *addr1, std::string addr2);
+static bool Equal(UINT8 *addr1, std::string addr2);
 
 /*
 * Entry.
@@ -147,12 +147,12 @@ int __cdecl main(int argc, char **argv)
         dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
 
       // if Outbound
-      if (Compare(dst_addr, origin_dst_ip)) {
+      if (Equal(dst_addr, origin_dst_ip)) {
         memcpy(dst_addr, modified_dst_ip_uint8, sizeof(modified_dst_ip_uint8));
         tcp_header->DstPort = htons(modified_dst_port_uint16);
       }
       // else if Inbound
-      else if (Compare(src_addr, modified_dst_ip)) {
+      else if (Equal(src_addr, modified_dst_ip)) {
         memcpy(src_addr, origin_dst_ip_uint8, sizeof(modified_dst_ip_uint8));
         tcp_header->SrcPort = htons(origin_dst_port_uint16);
         recv_addr.Direction = !recv_addr.Direction;
@@ -206,7 +206,7 @@ static void PacketIpTcpInit(PTCPPACKET packet)
   packet->tcp.HdrLength = sizeof(WINDIVERT_TCPHDR) / sizeof(UINT32);
 }
 
-static bool Compare(UINT8 *addr1, std::string addr2) {
+static bool Equal(UINT8 *addr1, std::string addr2) {
   UINT8 temp_addr[4];
   inet_pton(AF_INET, addr2.c_str(), temp_addr);
   for (int i = 0; i < 4; i++) {
