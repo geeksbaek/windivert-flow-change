@@ -1,3 +1,9 @@
+/*
+  Issue.
+  1. 프록시 서버가 로컬에 있는 경우 정상적으로 리다이렉트되지 않는 문제.
+  2. 웹 브라우저에서의 접속은 정상적으로 리다이렉트되나, SnoopSpy의 NetClinet->NetServer 연결이 정상적으로 되지 않는 문제.
+*/
+
 #include <winsock2.h>
 #include <windows.h>
 #include <stdio.h>
