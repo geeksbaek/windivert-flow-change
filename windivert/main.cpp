@@ -1,7 +1,3 @@
-/*
-Usage: windivert-example.exe [origin_ip] [origin_port] [modified_ip] [modified_port]
-*/
-
 #include <winsock2.h>
 #include <windows.h>
 #include <stdio.h>
