@@ -1,5 +1,5 @@
 /*
-  Usage: windivert-example.exe [origin_ip] [origin_port] [modified_ip] [modified_port]
+Usage: windivert-example.exe [origin_ip] [origin_port] [modified_ip] [modified_port]
 */
 
 #include <winsock2.h>
@@ -11,9 +11,10 @@
 #include <string>
 #include <WS2tcpip.h>
 #include <iostream>
+#include <map>
+#include <tuple>
 
 #include "windivert.h"
-#include "FlowChanger.h"
 
 #define MAXBUF  0xFFFF
 
@@ -29,9 +30,20 @@ typedef struct
 /*
 * Prototypes.
 */
-static void PacketIpInit(PWINDIVERT_IPHDR packet);
-static void PacketIpTcpInit(PTCPPACKET packet);
-static bool Equal(UINT8 *addr1, std::string addr2);
+static void PrintTitle(std::string msg, int color, HANDLE console);
+static void PrintPacket(PWINDIVERT_IPHDR ipHdr, PWINDIVERT_TCPHDR tcpHdr);
+void RedirectOutBound(std::string filter);
+void ValidateHadle(HANDLE handle);
+static void SwapAddr(UINT32 *a, UINT32 *b);
+
+// Global Variable.
+INT16 PRIORITY = 0;
+UINT8 PROXY_ADDR[4];
+UINT16 PROXY_PORT;
+UINT16 HTTP_PORT;
+
+std::string PROXY_ADDR_STR;
+std::string PROXY_PORT_STR;
 
 /*
 * Entry.
@@ -39,86 +51,51 @@ static bool Equal(UINT8 *addr1, std::string addr2);
 int __cdecl main(int argc, char **argv)
 {
   HANDLE handle, console;
-  INT16 priority = 0;
   unsigned char packet[MAXBUF];
   UINT packet_len;
-  WINDIVERT_ADDRESS recv_addr, send_addr;
+  WINDIVERT_ADDRESS addr;
   PWINDIVERT_IPHDR ip_header;
   PWINDIVERT_TCPHDR tcp_header;
   UINT payload_len;
 
-  TCPPACKET reset0;
-  PTCPPACKET reset = &reset0;
+  std::string proxy_ip_str, proxy_port_str;
 
-  std::string origin_dst_ip, modified_dst_ip;
-  std::string origin_dst_port, modified_dst_port;
+  UINT16 modified_src_port = 10000;
 
-  UINT8 origin_dst_ip_uint8[4], modified_dst_ip_uint8[4];
-  UINT16 origin_dst_port_uint16, modified_dst_port_uint16;
+  std::map<int, std::tuple<int, UINT32>> record;
 
   // Check arguments.
   switch (argc)
   {
-  case 5:
-    origin_dst_ip = std::string(argv[1]);
-    origin_dst_port = std::string(argv[2]);
-    modified_dst_ip = std::string(argv[3]);
-    modified_dst_port = std::string(argv[4]);
-
-    inet_pton(AF_INET, origin_dst_ip.c_str(), origin_dst_ip_uint8);
-    inet_pton(AF_INET, modified_dst_ip.c_str(), modified_dst_ip_uint8);
-
-    origin_dst_port_uint16 = atoi(origin_dst_port.c_str());
-    modified_dst_port_uint16 = atoi(modified_dst_port.c_str());
-
+  case 3:
+    proxy_ip_str = std::string(argv[1]);
+    proxy_port_str = std::string(argv[2]);
+    inet_pton(AF_INET, proxy_ip_str.c_str(), PROXY_ADDR);
+    PROXY_PORT = atoi(proxy_port_str.c_str());
     break;
   default:
-    fprintf(stderr, "usage: %s [origin_ip] [origin_port] [modified_ip] [modified_port]\n",
-      argv[0]);
+    fprintf(stderr, "usage: %s [modified_ip] [modified_port]\n", argv[0]);
     fprintf(stderr, "examples:\n");
-    fprintf(stderr, "\t%s 192.168.0.1 80 192.168.0.2 8080\n", argv[0]);
+    fprintf(stderr, "\t%s 10.100.111.139 8080\n", argv[0]);
     exit(EXIT_FAILURE);
   }
 
-  // Initialize all packets.
-  PacketIpTcpInit(reset);
-  reset->tcp.Rst = 1;
-  reset->tcp.Ack = 1;
-
-                              // Get console for pretty colors.
+  // Get console for pretty colors.
   console = GetStdHandle(STD_OUTPUT_HANDLE);
 
-  std::string filter = 
-    "("
-    "(outbound and ip.DstAddr == " + origin_dst_ip + " and "
-    "tcp.DstPort == " + origin_dst_port + ") or "
-    "(inbound and ip.SrcAddr == " + modified_dst_ip + " and "
-    "tcp.SrcPort == " + modified_dst_port + ")"
-    ")";
+  std::string filter = "((outbound and ip.SrcAddr == 10.100.111.139 and tcp.DstPort == 80) or (inbound and ip.SrcAddr == " + proxy_ip_str + " and tcp.SrcPort == " + proxy_port_str + "))";
 
   std::cout << "filter : " << filter << std::endl;
 
   // Divert traffic matching the filter:
-  handle = WinDivertOpen(filter.c_str(), WINDIVERT_LAYER_NETWORK, priority, 0);
-
-  if (handle == INVALID_HANDLE_VALUE)
-  {
-    if (GetLastError() == ERROR_INVALID_PARAMETER)
-    {
-      fprintf(stderr, "error: filter syntax error\n");
-      exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, "error: failed to open the WinDivert device (%d)\n",
-      GetLastError());
-    exit(EXIT_FAILURE);
-  }
+  handle = WinDivertOpen(filter.c_str(), WINDIVERT_LAYER_NETWORK, PRIORITY, 0);
+  ValidateHadle(handle);
 
   // Main loop:
   while (TRUE)
   {
     // Read a matching packet.
-    if (!WinDivertRecv(handle, packet, sizeof(packet), &recv_addr,
-      &packet_len))
+    if (!WinDivertRecv(handle, packet, sizeof(packet), &addr, &packet_len))
     {
       fprintf(stderr, "warning: failed to read packet\n");
       continue;
@@ -127,92 +104,144 @@ int __cdecl main(int argc, char **argv)
     WinDivertHelperParsePacket(packet, packet_len, &ip_header,
       NULL, NULL, NULL, &tcp_header, NULL, NULL, &payload_len);
 
-    if (ip_header == NULL || tcp_header == NULL)
-    {
-      continue;
-    }
-
     if (ip_header != NULL && tcp_header != NULL)
     {
       UINT8 *src_addr = (UINT8 *)&ip_header->SrcAddr;
       UINT8 *dst_addr = (UINT8 *)&ip_header->DstAddr;
 
-      SetConsoleTextAttribute(console, FOREGROUND_GREEN);
-      fputs("origin packet   : ", stdout);
-      SetConsoleTextAttribute(console,
-        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-
-      printf("ip.SrcAddr=%u.%u.%u.%u ip.DstAddr=%u.%u.%u.%u\n",
-        src_addr[0], src_addr[1], src_addr[2], src_addr[3],
-        dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
-
       // if Outbound
-      if (Equal(dst_addr, origin_dst_ip)) {
-        memcpy(dst_addr, modified_dst_ip_uint8, sizeof(modified_dst_ip_uint8));
-        tcp_header->DstPort = htons(modified_dst_port_uint16);
+      if (addr.Direction == WINDIVERT_DIRECTION_OUTBOUND) {
+        std::cout << "Outbound." << std::endl;
+
+        PrintTitle("origin packet   : ", FOREGROUND_GREEN, console);
+        PrintPacket(ip_header, tcp_header);
+
+        record[modified_src_port] = std::make_tuple(ntohs(tcp_header->SrcPort), *(UINT32*)dst_addr);
+
+        ip_header->DstAddr = *(UINT32*)&PROXY_ADDR;
+        tcp_header->SrcPort = htons(modified_src_port);
+        tcp_header->DstPort = htons(PROXY_PORT);
+
+        modified_src_port++;
+        if (modified_src_port >= 65535) {
+          modified_src_port = 10000;
+        }
       }
       // else if Inbound
-      else if (Equal(src_addr, modified_dst_ip)) {
-        memcpy(src_addr, origin_dst_ip_uint8, sizeof(modified_dst_ip_uint8));
-        tcp_header->SrcPort = htons(origin_dst_port_uint16);
-        recv_addr.Direction = !recv_addr.Direction;
+      else if (addr.Direction == WINDIVERT_DIRECTION_INBOUND && record.count(ntohs(tcp_header->DstPort)) > 0) {
+        std::cout << "Inbound." << std::endl;
+
+        PrintTitle("origin packet   : ", FOREGROUND_GREEN, console);
+        PrintPacket(ip_header, tcp_header);
+
+        auto key = ntohs(tcp_header->DstPort);
+
+        ip_header->SrcAddr = std::get<1>(record[key]);
+        tcp_header->SrcPort = htons(80);
+        tcp_header->DstPort = htons(std::get<0>(record[key]));
+        // recv_addr.Direction = !recv_addr.Direction;
+
+        record.erase(key);
       }
       else {
         continue;
       }
 
-      SetConsoleTextAttribute(console, FOREGROUND_RED);
-      fputs("modified packet : ", stdout);
-      SetConsoleTextAttribute(console,
-        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+      PrintTitle("modified packet : ", FOREGROUND_RED, console);
+      PrintPacket(ip_header, tcp_header);
 
-      printf("ip.SrcAddr=%u.%u.%u.%u ip.DstAddr=%u.%u.%u.%u\n",
-        src_addr[0], src_addr[1], src_addr[2], src_addr[3],
-        dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
-   
       WinDivertHelperCalcChecksums(packet, packet_len, 0);
 
-      if (!WinDivertSend(handle, packet, packet_len, &recv_addr, NULL)) {
+      if (!WinDivertSend(handle, packet, packet_len, &addr, NULL)) {
         fprintf(stderr, "\nwarning: failed to send (%d)", GetLastError());
       }
 
+      putchar('\n');
+    }
+  }
+}
+
+void RedirectOutBound(std::string filter) {
+  auto handle = WinDivertOpen(filter.c_str(), WINDIVERT_LAYER_NETWORK, PRIORITY, 0);
+  ValidateHadle(handle);
+
+  unsigned char packet[MAXBUF];
+  UINT packet_len;
+  WINDIVERT_ADDRESS addr;
+  PWINDIVERT_IPHDR ip_header;
+  PWINDIVERT_TCPHDR tcp_header;
+  UINT payload_len;
+
+  while (TRUE) {
+    if (!WinDivertRecv(handle, packet, sizeof(packet), &addr, &payload_len)) {
+      fprintf(stderr, "warning: failed to read packet\n");
+      continue;
+    }
+    WinDivertHelperParsePacket(packet, packet_len, &ip_header,
+      NULL, NULL, NULL, &tcp_header, NULL, NULL, &payload_len);
+
+    // drop nono tcp/ip packet.
+    if (ip_header == NULL || tcp_header == NULL) {
+      continue;
     }
 
-    putchar('\n');
+    // drop inbound packet.
+    if (addr.Direction == WINDIVERT_DIRECTION_INBOUND) {
+      continue;
+    }
+
+    if (ntohs(tcp_header->DstPort) == HTTP_PORT) {
+      SwapAddr(&ip_header->DstAddr, &ip_header->DstAddr);
+      tcp_header->DstPort = htons(PROXY_PORT);
+      addr.Direction = WINDIVERT_DIRECTION_INBOUND;
+    }
+    else if (ntohs(tcp_header->SrcPort) == PROXY_PORT) {
+      SwapAddr(&ip_header->DstAddr, &ip_header->DstAddr);
+      tcp_header->DstPort = htons(HTTP_PORT);
+      addr.Direction = WINDIVERT_DIRECTION_INBOUND;
+    }
+    else {
+      continue;
+    }
+
+    WinDivertHelperCalcChecksums(packet, packet_len, 0);
+    if (!WinDivertSend(handle, packet, payload_len, &addr, NULL)) {
+      fprintf(stderr, "\nwarning: failed to send (%d)", GetLastError());
+      continue;
+    }
   }
 }
 
-/*
-* Initialize a PACKET.
-*/
-static void PacketIpInit(PWINDIVERT_IPHDR packet)
-{
-  memset(packet, 0, sizeof(WINDIVERT_IPHDR));
-  packet->Version = 4;
-  packet->HdrLength = sizeof(WINDIVERT_IPHDR) / sizeof(UINT32);
-  packet->Id = ntohs(0xDEAD);
-  packet->TTL = 64;
-}
-
-/*
-* Initialize a TCPPACKET.
-*/
-static void PacketIpTcpInit(PTCPPACKET packet)
-{
-  memset(packet, 0, sizeof(TCPPACKET));
-  PacketIpInit(&packet->ip);
-  packet->ip.Length = htons(sizeof(TCPPACKET));
-  packet->ip.Protocol = IPPROTO_TCP;
-  packet->tcp.HdrLength = sizeof(WINDIVERT_TCPHDR) / sizeof(UINT32);
-}
-
-static bool Equal(UINT8 *addr1, std::string addr2) {
-  UINT8 temp_addr[4];
-  inet_pton(AF_INET, addr2.c_str(), temp_addr);
-  for (int i = 0; i < 4; i++) {
-    if (temp_addr[i] != addr1[i]) {
-      return false;
+void ValidateHadle(HANDLE handle) {
+  if (handle == INVALID_HANDLE_VALUE)
+  {
+    if (GetLastError() == ERROR_INVALID_PARAMETER)
+    {
+      fprintf(stderr, "error: filter syntax error\n");
+      exit(EXIT_FAILURE);
     }
+    fprintf(stderr, "error: failed to open the WinDivert device (%d)\n", GetLastError());
+    exit(EXIT_FAILURE);
   }
-  return true;
+}
+
+static void SwapAddr(UINT32 *a, UINT32 *b) {
+  UINT32 temp = *a;
+  *b = *a;
+  *a = temp;
+}
+
+static void PrintTitle(std::string msg, int color, HANDLE console) {
+  SetConsoleTextAttribute(console, color);
+  fputs(msg.c_str(), stdout);
+  SetConsoleTextAttribute(console, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+}
+
+static void PrintPacket(PWINDIVERT_IPHDR ipHdr, PWINDIVERT_TCPHDR tcpHdr) {
+  UINT8 *src_addr = (UINT8 *)&ipHdr->SrcAddr;
+  UINT8 *dst_addr = (UINT8 *)&ipHdr->DstAddr;
+
+  printf("src=%u.%u.%u.%u:%d dst=%u.%u.%u.%u:%d\n",
+    src_addr[0], src_addr[1], src_addr[2], src_addr[3], ntohs(tcpHdr->SrcPort),
+    dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3], ntohs(tcpHdr->DstPort));
 }
