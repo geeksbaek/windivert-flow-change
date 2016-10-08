@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include <string>
-#include <WS2tcpip.h>
+#include <WS2tcpip.h> // for inet_pton()
 #include <iostream>
 #include <map>
 
