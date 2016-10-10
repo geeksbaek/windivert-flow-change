@@ -20,7 +20,10 @@
 
 #define MAXBUF  0xFFFF
 
-typedef std::tuple<UINT32, UINT16> Addr;
+typedef UINT32 IP;
+typedef UINT16 PORT;
+
+typedef std::tuple<IP, PORT> Addr;
 
 /*
 * Prototypes.
@@ -102,8 +105,6 @@ int __cdecl main(int argc, char **argv)
       Addr srcAddr(ipHdr->SrcAddr, tcpHdr->SrcPort);
       Addr dstAddr(ipHdr->DstAddr, tcpHdr->DstPort);
       history[srcAddr] = dstAddr;
-
-
 
       ipHdr->DstAddr = PROXY_ADDR;
       tcpHdr->DstPort = htons(PROXY_PORT);
