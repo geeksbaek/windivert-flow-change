@@ -14,22 +14,13 @@
 #include <WS2tcpip.h> // for inet_pton()
 #include <iostream>
 #include <map>
+#include <tuple>
 
 #include "windivert.h"
 
 #define MAXBUF  0xFFFF
 
-struct Addr {
-  UINT32 ip;
-  UINT16 port;
-
-  bool operator<(const Addr &ep) const { return (ip < ep.ip || (ip == ep.ip && port < ep.port)); }
-  bool operator==(const Addr &ep) const { return (ip == ep.ip && port == ep.port); }
-  bool operator>(const Addr &ep) const { return (ip > ep.ip || (ip == ep.ip && port > ep.port)); }
-
-  Addr() {}
-  Addr(UINT32 _ip, UINT16 _port) : ip(_ip), port(_port) {}
-};
+typedef std::tuple<UINT32, UINT16> Addr;
 
 /*
 * Prototypes.
@@ -112,6 +103,8 @@ int __cdecl main(int argc, char **argv)
       Addr dstAddr(ipHdr->DstAddr, tcpHdr->DstPort);
       history[srcAddr] = dstAddr;
 
+
+
       ipHdr->DstAddr = PROXY_ADDR;
       tcpHdr->DstPort = htons(PROXY_PORT);
 
@@ -134,8 +127,7 @@ int __cdecl main(int argc, char **argv)
       Addr dstAddr(ipHdr->DstAddr, tcpHdr->DstPort);
       Addr originDstAddr = history[dstAddr];
 
-      ipHdr->SrcAddr = originDstAddr.ip;
-      tcpHdr->SrcPort = originDstAddr.port;
+      std::tie(ipHdr->SrcAddr, tcpHdr->SrcPort) = originDstAddr;
 
       WinDivertHelperCalcChecksums(packet, pktLen, 0);
       if (!WinDivertSend(handle, packet, pktLen, &addr, NULL))
