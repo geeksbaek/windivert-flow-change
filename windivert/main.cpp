@@ -30,7 +30,7 @@ typedef std::tuple<IP, PORT> Addr;
 */
 static void PrintTitle(std::string msg, int color);
 static void PrintPacket(PWINDIVERT_IPHDR ipHdr, PWINDIVERT_TCPHDR tcpHdr);
-void ValidateHadle(HANDLE handle);
+void HandleValidation(HANDLE handle);
 
 // Global Variable.
 HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -72,12 +72,14 @@ int __cdecl main(int argc, char **argv)
     exit(EXIT_FAILURE);
   }
 
-  std::string filter = "((outbound and tcp.DstPort == 80) or (inbound and tcp.SrcPort == " + PROXY_PORT_STR + "))";
+  std::string filter = 
+    "((outbound and tcp.DstPort == " + std::to_string(HTTP_PORT)+ ")"
+    "or (inbound and tcp.SrcPort == " + PROXY_PORT_STR + "))";
   std::cout << "filter : " << filter << std::endl;
 
   // Divert traffic matching the filter:
   handle = WinDivertOpen(filter.c_str(), WINDIVERT_LAYER_NETWORK, PRIORITY, 0);
-  ValidateHadle(handle);
+  HandleValidation(handle);
 
   // Main loop:
   while (TRUE)
@@ -126,9 +128,7 @@ int __cdecl main(int argc, char **argv)
       PrintPacket(ipHdr, tcpHdr);
 
       Addr dstAddr(ipHdr->DstAddr, tcpHdr->DstPort);
-      Addr originDstAddr = history[dstAddr];
-
-      std::tie(ipHdr->SrcAddr, tcpHdr->SrcPort) = originDstAddr;
+      std::tie(ipHdr->SrcAddr, tcpHdr->SrcPort) = history[dstAddr];
 
       WinDivertHelperCalcChecksums(packet, pktLen, 0);
       if (!WinDivertSend(handle, packet, pktLen, &addr, NULL))
@@ -147,7 +147,7 @@ int __cdecl main(int argc, char **argv)
   }
 }
 
-void ValidateHadle(HANDLE handle) {
+void HandleValidation(HANDLE handle) {
   if (handle == INVALID_HANDLE_VALUE)
   {
     if (GetLastError() == ERROR_INVALID_PARAMETER)
